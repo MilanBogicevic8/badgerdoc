@@ -4,7 +4,7 @@ FROM ${base_image} as build
 WORKDIR /opt/users
 
 COPY users ./users
-COPY pyproject.toml poetry.lock .env version.txt ./
+COPY pyproject.toml poetry.lock version.txt ./
 
 RUN : \
     && apt-get update \
@@ -34,7 +34,7 @@ COPY tests /sonar/tests
 COPY sonar-project.properties /sonar/sonar-project.properties
 
 CMD sonar-scanner \
-  -Dsonar.projectKey=$SONAR_PROJECT_KEY_USERS \
-  -Dproject.settings=/sonar/sonar-project.properties \
-  -Dsonar.host.url=$SONAR_HOST_URL \
-  -Dsonar.login=$SONAR_TOKEN_USERS
+    -Dsonar.projectKey=$SONAR_PROJECT_KEY_USERS \
+    -Dproject.settings=/sonar/sonar-project.properties \
+    -Dsonar.host.url=$SONAR_HOST_URL \
+    -Dsonar.login=$SONAR_TOKEN_USERS

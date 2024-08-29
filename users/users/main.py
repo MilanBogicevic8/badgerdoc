@@ -1,29 +1,29 @@
+import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 
 import aiohttp
 import pydantic
 from aiohttp.web_exceptions import HTTPException as AIOHTTPException
+from badgerdoc_storage import storage as bd_storage
 from email_validator import EmailNotValidError, validate_email
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from tenant_dependency import TenantData, get_tenant_info
+from tenant_dependency import BadgerdocJWT, TenantData, get_tenant_info
 
 import users.config as conf
 import users.keycloak.query as kc_query
 import users.keycloak.schemas as kc_schemas
 import users.keycloak.utils as kc_utils
 from users import service_account, utils
-from users.config import (
-    KEYCLOAK_ROLE_ADMIN,
-    KEYCLOAK_SYSTEM_USER_SECRET,
-    ROOT_PATH,
-)
+from users.config import KEYCLOAK_ROLE_ADMIN, KEYCLOAK_SYSTEM_USER_SECRET, ROOT_PATH
 from users.schemas import Users
 
 app = FastAPI(title="users", root_path=ROOT_PATH, version="0.1.3")
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 realm = conf.KEYCLOAK_REALM
 
@@ -52,19 +52,13 @@ def check_authorization(token: TenantData, role: str) -> None:
 
 
 @app.middleware("http")
-async def request_error_handler(
-    request: Request, call_next: Callable[..., Any]
-) -> Any:
+async def request_error_handler(request: Request, call_next: Callable[..., Any]) -> Any:
     try:
         return await call_next(request)
     except aiohttp.ClientResponseError as err:
-        return JSONResponse(
-            status_code=err.status, content={"detail": err.message}
-        )
+        return JSONResponse(status_code=err.status, content={"detail": err.message})
     except AIOHTTPException as err:
-        return JSONResponse(
-            status_code=err.status_code, content={"detail": err.reason}
-        )
+        return JSONResponse(status_code=err.status_code, content={"detail": err.reason})
 
 
 @app.post(
@@ -81,7 +75,22 @@ async def login(
         credentials = kc_schemas.TokenRequest.from_fastapi_form(form_data)
     except pydantic.ValidationError as err:
         raise HTTPException(status_code=422, detail=err.errors())
-    return await kc_query.get_token_v2(realm, credentials)
+    token = await kc_query.get_token_v2(realm, credentials)
+    # Check if it's admin and check if tenants directory created
+    badgerdoc_jwt = BadgerdocJWT(
+        KEYCLOAK_SYSTEM_USER_SECRET,
+        algorithm="RS256",
+        url=KEYCLOAK_HOST,
+    )
+    decoded = badgerdoc_jwt.decode_token(token.access_token)
+    if "admin" in decoded.roles:
+        logger.info("User is admin, trying to create tenants folders")
+        for tenant in decoded.tenants:
+            logger.info("Creating tenants folder '%s'", tenant)
+            st = bd_storage.get_storage(tenant)
+            created = st.create_tenant_dir()
+            logger.info("Folder %s created: %s", tenant, created)
+    return token
 
 
 @app.post(
@@ -117,9 +126,7 @@ async def user_registration(
         realm=realm, token=token.token, email=email, exact="true"
     )
     user_id = user[0].id
-    await kc_query.execute_action_email(
-        token=token.token, realm=realm, user_id=user_id
-    )
+    await kc_query.execute_action_email(token=token.token, realm=realm, user_id=user_id)
     return {"detail": "User has been created"}
 
 
@@ -166,17 +173,13 @@ async def get_user(
     return await kc_query.get_user(realm, token_, user_id)
 
 
-@app.get(
-    "/tenants", status_code=200, response_model=List[str], tags=["tenants"]
-)
+@app.get("/tenants", status_code=200, response_model=List[str], tags=["tenants"])
 async def get_tenants(
     token: TenantData = Depends(tenant),
     current_tenant: Optional[str] = Header(None, alias="X-Current-Tenant"),
 ) -> List[str]:
     """Get all tenants."""
-    return [
-        group.name for group in await kc_query.get_groups(realm, token.token)
-    ]
+    return [group.name for group in await kc_query.get_groups(realm, token.token)]
 
 
 @app.post(
@@ -260,9 +263,7 @@ async def get_users_by_filter(
             role=filters.get("role").value,  # type: ignore
         )
     else:
-        users_list = await kc_query.get_users_v2(
-            realm=realm, token=token.token
-        )
+        users_list = await kc_query.get_users_v2(realm=realm, token=token.token)
 
     users_list = kc_schemas.User.filter_users(
         users=users_list,

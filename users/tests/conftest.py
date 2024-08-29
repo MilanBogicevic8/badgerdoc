@@ -135,7 +135,5 @@ def mocked_identity_providers_data():
 
 @pytest.fixture
 def keycloak_host_mock():
-    with patch(
-        "users.config.KEYCLOAK_HOST", "http://example.com"
-    ) as host_mock:
+    with patch("users.config.KEYCLOAK_HOST", "http://example.com") as host_mock:
         yield host_mock

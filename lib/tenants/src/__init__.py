@@ -1,2 +1,2 @@
-from .dependency import get_tenant_info  # noqa
+from .dependency import get_tenant_info, BadgerdocJWT  # noqa
 from .schema import TenantData  # noqa
